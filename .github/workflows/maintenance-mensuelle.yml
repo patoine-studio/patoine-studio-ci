@@ -148,11 +148,23 @@ jobs:
             12) mois_prev_fr="décembre" ;;
           esac
 
+          # Trois modes possibles :
+          #   - test    : sujet préfixé "Test live", bandeau jaune dans le HTML, to PS, bcc vide.
+          #              Sert à valider la chaîne technique sans toucher au client.
+          #   - preview : sujet identique à prod, HTML identique à prod (sans bandeau test),
+          #              mais to redirigé vers PS et bcc vide. Sert à valider visuellement
+          #              le rendu exact que verra le client, sans le déranger.
+          #   - prod    : sujet client, HTML client, to client, bcc PS pour la copie.
           if [ "${MODE_IN}" = "test" ]; then
             echo "mode=test" >> "$GITHUB_OUTPUT"
             echo "to=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
             echo "bcc=" >> "$GITHUB_OUTPUT"
             echo "subject=[Patoine Studio - Test live] ${CLIENT_DOMAIN} - rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
+          elif [ "${MODE_IN}" = "preview" ]; then
+            echo "mode=preview" >> "$GITHUB_OUTPUT"
+            echo "to=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
+            echo "bcc=" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=prod" >> "$GITHUB_OUTPUT"
             echo "to=${CLIENT_EMAIL}" >> "$GITHUB_OUTPUT"
