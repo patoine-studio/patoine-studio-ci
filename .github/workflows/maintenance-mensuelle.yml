@@ -320,33 +320,33 @@ jobs:
           if [ ! -f lychee-report.json ]; then
             echo "broken_count=0" >> "$GITHUB_OUTPUT"
             echo "total=0" >> "$GITHUB_OUTPUT"
-            echo "liens_html=<p>Vérification automatique des liens du site, aucun lien brisé détecté ce mois-ci.</p>" >> "$GITHUB_OUTPUT"
+            echo "liens_inline=Vérification automatique mensuelle, aucun lien brisé détecté." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          total=$(jq -r '.total // 0' lychee-report.json)
-          errors=$(jq -r '.errors // 0' lychee-report.json)
+          total=$(jq -r ''.total // 0'' lychee-report.json)
+          errors=$(jq -r ''.errors // 0'' lychee-report.json)
           echo "Total: ${total}, Errors: ${errors}"
           echo "total=${total}" >> "$GITHUB_OUTPUT"
           echo "broken_count=${errors}" >> "$GITHUB_OUTPUT"
 
+          # Phrase de statut compacte qui s'insère dans la puce Technique > Liens
           if [ "${errors}" -gt 0 ]; then
-            # Construction de la liste HTML pour le rapport client
-            liens_items=$(jq -r '
+            liens_items=$(jq -r ''
               .fail_map
               | to_entries
               | map(.value[] | "<li><code>\(.url)</code> (\(.status.text // .status.code // "erreur"))</li>")
-              | join("\n")
-            ' lychee-report.json)
-            liens_html="<p>${errors} lien(s) brisé(s) détecté(s) sur les ${total} vérifiés. Voici les URL concernées :</p><ul>${liens_items}</ul><p>Je vais regarder pour les corriger dans le prochain cycle.</p>"
+              | join("")
+            '' lychee-report.json)
+            liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés :<ul style=''margin:6px 0 6px 0;padding-left:20px;''>${liens_items}</ul>Je les corrige dans le prochain cycle."
           else
-            liens_html="<p>Vérification automatique des liens du site, <strong>aucun lien brisé détecté</strong> sur les ${total} liens vérifiés ce mois-ci.</p>"
+            liens_inline="Vérification automatique mensuelle. Aucun lien brisé détecté sur les ${total} liens vérifiés ce mois-ci. Utile parce que les liens vers tes réseaux sociaux ou des sites partenaires peuvent disparaître avec le temps."
           fi
-          # Output multi-ligne
+
           {
-            echo "liens_html<<LYCHEE_HTML_EOF"
-            echo "${liens_html}"
-            echo "LYCHEE_HTML_EOF"
+            echo "liens_inline<<LIENS_INLINE_EOF"
+            echo "${liens_inline}"
+            echo "LIENS_INLINE_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Audit des dépendances (npm/yarn/pnpm)
@@ -421,7 +421,7 @@ jobs:
           CLIENT_LABEL: ${{ inputs.client_label }}
           MOIS_LABEL: ${{ steps.mode.outputs.mois_label }}
           VITESSE_HTML: ${{ steps.delta.outputs.vitesse_html }}
-          LIENS_HTML: ${{ steps.liens.outputs.liens_html }}
+          LIENS_INLINE: ${{ steps.liens.outputs.liens_inline }}
         run: |
           set -euo pipefail
 
@@ -439,14 +439,17 @@ jobs:
             salutation="<p>Bonjour Philippe,</p><p>Petit mot pour la maintenance de ${MOIS_LABEL}.</p>"
           fi
 
-          # Section 1, Technique
-          section_technique="<h3 style='margin-top:24px;color:#1a1a1a;'>Technique</h3><p>Le site est en ligne et surveillé en continu. Le formulaire de contact a été testé automatiquement ce matin et fonctionne. Aucun incident détecté ce mois-ci.</p>"
+          # Section 1, Technique (3 puces, surveillance continue mise en valeur)
+          section_technique="<h3 style='margin-top:24px;color:#1a1a1a;'>Technique</h3><p>Trois éléments sont vérifiés en continu et chaque mois pour s'assurer que ton site fait son travail sans accroc :</p><ul style='padding-left:20px;'>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Disponibilité du site</strong> — Surveillance active 24/7 qui confirme que ton site reste accessible aux visiteurs en tout temps. Aucun incident détecté ce mois-ci.</li>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Santé du formulaire de contact</strong> — Sa configuration en arrière-plan est surveillée en continu pour s'assurer qu'il reste fonctionnel. En complément, j'ai exécuté ce matin un test complet de bout en bout (envoi réel d'un courriel à travers ton site) et tout passe correctement, tes leads aboutiraient bien dans ta boîte.</li>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Liens du site</strong> — ${LIENS_INLINE}</li>"
+          section_technique="${section_technique}</ul>"
 
           # Section 2, Vitesse (HTML composé par le step delta, qualitatif)
           section_vitesse="<h3 style='margin-top:24px;color:#1a1a1a;'>Vitesse</h3>${VITESSE_HTML}"
 
-          # Section 3, Liens
-          section_liens="<h3 style='margin-top:24px;color:#1a1a1a;'>Liens</h3>${LIENS_HTML}"
+          # Section Liens supprimée, intégrée dans Technique comme 3e puce
 
           # Section 4, Conseil du mois (placeholder pour V1 sans Notion)
           section_conseil="<h3 style='margin-top:24px;color:#1a1a1a;'>Conseil du mois</h3><p><em>(Catalogue de conseils en construction, première rotation activée au prochain cycle.)</em></p><p>Quand tu envoies des photos pour ton site, vise toujours du format WebP plutôt que JPEG ou PNG, ça réduit le poids de 30 % sans perte visible. <strong>Chez Patoine Studio, on convertit toutes les images au format optimal pour mobile par défaut.</strong></p>"
@@ -458,7 +461,7 @@ jobs:
             pied="<p style='margin-top:32px;'>Si tu remarques quoi que ce soit ou si tu veux des ajustements, écris-moi.</p><p>Charles, Patoine Studio</p>"
           fi
 
-          html="<div style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;max-width:600px;'>${intro}${salutation}${section_technique}${section_vitesse}${section_liens}${section_conseil}${pied}</div>"
+          html="<div style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:15px;line-height:1.5;color:#1a1a1a;max-width:600px;'>${intro}${salutation}${section_technique}${section_vitesse}${section_conseil}${pied}</div>"
 
           payload=$(jq -n \
             --arg from "${PS_FROM}" \
