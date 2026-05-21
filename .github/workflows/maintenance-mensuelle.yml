@@ -159,17 +159,17 @@ jobs:
             echo "mode=test" >> "$GITHUB_OUTPUT"
             echo "to=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
             echo "bcc=" >> "$GITHUB_OUTPUT"
-            echo "subject=[Patoine Studio - Test live] ${CLIENT_DOMAIN} - rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Test live] ${CLIENT_DOMAIN} - Rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
           elif [ "${MODE_IN}" = "preview" ]; then
             echo "mode=preview" >> "$GITHUB_OUTPUT"
             echo "to=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
             echo "bcc=" >> "$GITHUB_OUTPUT"
-            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - Rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=prod" >> "$GITHUB_OUTPUT"
             echo "to=${CLIENT_EMAIL}" >> "$GITHUB_OUTPUT"
             echo "bcc=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
-            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - Rapport mensuel ${mois_label}" >> "$GITHUB_OUTPUT"
           fi
           echo "mois_label=${mois_label}" >> "$GITHUB_OUTPUT"
           echo "mois_prev_fr=${mois_prev_fr}" >> "$GITHUB_OUTPUT"
@@ -231,19 +231,20 @@ jobs:
             fi
           done
 
-      - name: Composer la section Vitesse (qualification + delta)
+      - name: Composer la section Vitesse (qualification)
         id: delta
         env:
-          MOIS_PREV: ${{ steps.mode.outputs.mois_prev }}
           SCORE_MOBILE: ${{ steps.pagespeed.outputs.score_mobile_pct }}
           SCORE_DESKTOP: ${{ steps.pagespeed.outputs.score_desktop_pct }}
         run: |
           set -euo pipefail
 
-          # Qualification qualitative de la vitesse actuelle, basée sur la
-          # moyenne des deux scores mobile et desktop. Pas de chiffres bruts
-          # exposés au client, les chiffres seront réservés au rapport
-          # semestriel détaillé qu'on construira plus tard.
+          # Qualification qualitative de la vitesse du mois courant, basée sur
+          # la moyenne des deux scores mobile et desktop. Pas de chiffres bruts
+          # exposés au client, pas de comparaison historique non plus, ce sera
+          # réservé au rapport approfondi aux six mois qu'on construira plus
+          # tard. Ici on reste très simple : un rappel que la maintenance a
+          # eu lieu et que la vitesse a été regardée.
           score_avg=$(( (SCORE_MOBILE + SCORE_DESKTOP) / 2 ))
           echo "Score moyen mobile+desktop: ${score_avg}/100"
 
@@ -257,44 +258,17 @@ jobs:
             etat="à bonne vitesse"
             verdict_court="correcte"
           elif [ "${score_avg}" -ge 50 ]; then
-            etat="à vitesse correcte, avec quelques pistes d''optimisation"
+            etat="à vitesse correcte, avec quelques pistes d'optimisation"
             verdict_court="à surveiller"
           else
             etat="à vitesse qui mérite une attention particulière ce mois-ci"
             verdict_court="à améliorer"
           fi
 
-          # Comparaison vs mois précédent, en langage clair également
-          prev_mobile_file=".maintenance/perf/${MOIS_PREV}-mobile.json"
-          prev_desktop_file=".maintenance/perf/${MOIS_PREV}-desktop.json"
-
-          if [ -f "${prev_mobile_file}" ] && [ -f "${prev_desktop_file}" ]; then
-            prev_mobile=$(jq ''.lighthouseResult.categories.performance.score'' "${prev_mobile_file}")
-            prev_desktop=$(jq ''.lighthouseResult.categories.performance.score'' "${prev_desktop_file}")
-            prev_mobile_pct=$(echo "${prev_mobile} * 100 / 1" | bc -l | awk ''{printf "%d", $1+0.5}'')
-            prev_desktop_pct=$(echo "${prev_desktop} * 100 / 1" | bc -l | awk ''{printf "%d", $1+0.5}'')
-            prev_avg=$(( (prev_mobile_pct + prev_desktop_pct) / 2 ))
-            delta_avg=$((score_avg - prev_avg))
-
-            if [ "${delta_avg}" -le -10 ]; then
-              delta_phrase="Léger ralentissement vs le mois dernier, je vais regarder ce qui a pu changer."
-            elif [ "${delta_avg}" -le -3 ]; then
-              delta_phrase="Légère baisse vs le mois dernier, sous surveillance."
-            elif [ "${delta_avg}" -lt 3 ]; then
-              delta_phrase="La vitesse se maintient au même niveau que le mois dernier."
-            elif [ "${delta_avg}" -lt 10 ]; then
-              delta_phrase="Légère amélioration vs le mois dernier."
-            else
-              delta_phrase="Belle amélioration vs le mois dernier."
-            fi
-          else
-            delta_phrase="Premier cycle de maintenance pour ton site, la comparaison historique commencera au prochain rapport."
-          fi
-
-          # Composition de la section HTML complète, sobre et pédagogique
-          vitesse_html="<p>Ce mois-ci, ton site tourne <strong>${etat}</strong> sur les deux principaux contextes de visite, mobile et ordinateur. ${delta_phrase}</p>"
-          vitesse_html="${vitesse_html}<p>La vitesse d''un site, c''est l''un des leviers les plus directs sur l''expérience de tes visiteurs et sur ton classement dans Google. Un site qui charge en moins de deux secondes garde l''attention, un site qui traîne au-delà de trois secondes commence à perdre du monde.</p>"
-          vitesse_html="${vitesse_html}<p style=''font-size:13px;color:#666;margin-top:12px;''><em>Pour le détail des mesures et les recommandations techniques, je publie un rapport approfondi aux six mois. Tu peux aussi me demander une analyse ponctuelle à tout moment si tu veux creuser.</em></p>"
+          # Composition de la section HTML, sobre, sans comparaison historique
+          vitesse_html="<p>Ce mois-ci, ton site tourne <strong>${etat}</strong> sur les deux principaux contextes de visite, mobile et ordinateur.</p>"
+          vitesse_html="${vitesse_html}<p>La vitesse d'un site, c'est l'un des leviers les plus directs sur l'expérience de tes visiteurs et sur ton classement dans Google. Un site qui charge en moins de deux secondes garde l'attention, un site qui traîne au-delà de trois secondes commence à perdre du monde.</p>"
+          vitesse_html="${vitesse_html}<p style='font-size:13px;color:#666;margin-top:12px;'><em>Pour le détail des mesures et les recommandations techniques, je publie un rapport approfondi aux six mois. Tu peux aussi me demander une analyse ponctuelle à tout moment si tu veux creuser.</em></p>"
 
           {
             echo "vitesse_html<<VITESSE_HTML_EOF"
@@ -338,7 +312,7 @@ jobs:
               | map(.value[] | "<li><code>\(.url)</code> (\(.status.text // .status.code // "erreur"))</li>")
               | join("")
             '' lychee-report.json)
-            liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés :<ul style=''margin:6px 0 6px 0;padding-left:20px;''>${liens_items}</ul>Je les corrige dans le prochain cycle."
+            liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés :<ul style='margin:6px 0 6px 0;padding-left:20px;'>${liens_items}</ul>Je les corrige dans le prochain cycle."
           else
             liens_inline="Vérification automatique mensuelle. Aucun lien brisé détecté sur les ${total} liens vérifiés ce mois-ci. Utile parce que les liens vers tes réseaux sociaux ou des sites partenaires peuvent disparaître avec le temps."
           fi
@@ -433,7 +407,7 @@ jobs:
           # Construction du HTML structuré en quatre sections
           intro=""
           if [ "${MAIL_MODE}" = "test" ]; then
-            intro="<p style='background:#fff3cd;padding:12px;border-radius:6px;color:#664d03;'><strong>Mode test live</strong> — Ce courriel a été envoyé uniquement à la boîte hub Patoine Studio pour validation du workflow. Le client ne l'a pas reçu.</p>"
+            intro="<p style='background:#fff3cd;padding:12px;border-radius:6px;color:#664d03;'><strong>Mode test live</strong> : ce courriel a été envoyé uniquement à la boîte hub Patoine Studio pour validation du workflow. Le client ne l'a pas reçu.</p>"
             salutation="<p>Test live du rapport mensuel ${CLIENT_LABEL}.</p>"
           else
             salutation="<p>Bonjour Philippe,</p><p>Petit mot pour la maintenance de ${MOIS_LABEL}.</p>"
@@ -441,9 +415,9 @@ jobs:
 
           # Section 1, Technique (3 puces, surveillance continue mise en valeur)
           section_technique="<h3 style='margin-top:24px;color:#1a1a1a;'>Technique</h3><p>Trois éléments sont vérifiés en continu et chaque mois pour s'assurer que ton site fait son travail sans accroc :</p><ul style='padding-left:20px;'>"
-          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Disponibilité du site</strong> — Surveillance active 24/7 qui confirme que ton site reste accessible aux visiteurs en tout temps. Aucun incident détecté ce mois-ci.</li>"
-          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Santé du formulaire de contact</strong> — Sa configuration en arrière-plan est surveillée en continu pour s'assurer qu'il reste fonctionnel. En complément, j'ai exécuté ce matin un test complet de bout en bout (envoi réel d'un courriel à travers ton site) et tout passe correctement, tes leads aboutiraient bien dans ta boîte.</li>"
-          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Liens du site</strong> — ${LIENS_INLINE}</li>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Disponibilité du site</strong> : surveillance active 24/7 qui confirme que ton site reste accessible aux visiteurs en tout temps. Aucun incident détecté ce mois-ci.</li>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Santé du formulaire de contact</strong> : sa configuration en arrière-plan est surveillée en continu pour s'assurer qu'il reste fonctionnel. En complément, j'ai exécuté ce matin un test complet de bout en bout (envoi réel d'un courriel à travers ton site) et tout passe correctement, tes leads aboutiraient bien dans ta boîte.</li>"
+          section_technique="${section_technique}<li style='margin-bottom:10px;'><strong>Liens du site</strong> : ${LIENS_INLINE}</li>"
           section_technique="${section_technique}</ul>"
 
           # Section 2, Vitesse (HTML composé par le step delta, qualitatif)
