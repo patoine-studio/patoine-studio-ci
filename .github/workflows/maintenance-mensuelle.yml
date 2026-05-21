@@ -1,0 +1,316 @@
+name: Maintenance mensuelle Patoine Studio (reusable)
+
+# Reusable workflow centralisé pour le rituel de maintenance mensuelle.
+# Appelé par chaque repo client en gestion mensuelle via un workflow caller
+# court qui passe les variables propres au client.
+#
+# Voir README.md de ce repo pour la procédure d'onboarding d'un nouveau client.
+#
+# Deux étapes utiles :
+#   1. Test du formulaire de contact via API Resend, courriel reconnaissable
+#      envoyé au client (et en copie cachée à la boîte hub Patoine Studio).
+#   2. Snapshot PageSpeed Insights mobile et desktop, commit dans
+#      .maintenance/perf/AAAA-MM-{mobile,desktop}.json pour suivi historique.
+#
+# Le job filtre "premier lundi du mois" pour ne déclencher la maintenance qu'à
+# la bonne date quand le caller utilise un cron hebdomadaire. Les déclenchements
+# manuels (workflow_dispatch côté caller) passent toujours.
+
+on:
+  workflow_call:
+    inputs:
+      client_domain:
+        description: "Domaine du client sans https://, ex. philemonproductions.ca"
+        required: true
+        type: string
+      client_label:
+        description: "Nom lisible du site, ex. Philémon Productions"
+        required: true
+        type: string
+      client_email:
+        description: "Adresse courriel du client où arrivent les vrais leads, ex. web.philemon@gmail.com"
+        required: true
+        type: string
+      site_url:
+        description: "URL complète avec https://, ex. https://philemonproductions.ca"
+        required: true
+        type: string
+      mode:
+        description: "Mode (test = envoi seulement à PS, prod = envoi au client avec bcc PS)"
+        required: false
+        type: string
+        default: prod
+      ps_admin_email:
+        description: "Boîte hub Patoine Studio destinataire des copies et alertes"
+        required: false
+        type: string
+        default: web.admin@patoinestudio.ca
+      ps_from:
+        description: "Expéditeur Resend, format 'Nom <adresse>'"
+        required: false
+        type: string
+        default: "Maintenance Patoine Studio <maintenance@patoinestudio.ca>"
+    secrets:
+      RESEND_API_KEY:
+        description: "Clé Resend du domaine d'envoi PS (patoinestudio.ca vérifié)"
+        required: true
+      PAGESPEED_API_KEY:
+        description: "Clé Google Cloud avec API PageSpeed Insights activée, recommandée pour éviter le rate-limit anonyme"
+        required: false
+
+jobs:
+  premier-lundi:
+    name: Vérifier que c'est bien le premier lundi du mois
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Déclenchement manuel, on lance la maintenance sans vérifier la date."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jour=$((10#$(date -u +%d)))
+          if [ "$jour" -le 7 ]; then
+            echo "Jour $jour, on est bien dans la première semaine du mois. On lance la maintenance."
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Jour $jour, pas le premier lundi du mois. On saute proprement."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  maintenance:
+    name: Cycle mensuel
+    needs: premier-lundi
+    if: needs.premier-lundi.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout du code source
+        uses: actions/checkout@v4
+
+      - name: Déterminer le mode et les destinataires
+        id: mode
+        env:
+          CLIENT_DOMAIN: ${{ inputs.client_domain }}
+          CLIENT_EMAIL: ${{ inputs.client_email }}
+          PS_ADMIN_EMAIL: ${{ inputs.ps_admin_email }}
+          MODE_IN: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+
+          # Locale fr non garantie sur les runners Ubuntu, on hardcode la
+          # table de correspondance pour avoir un sujet en français propre.
+          mois_num=$(date -u +%m)
+          annee=$(date -u +%Y)
+          case "${mois_num}" in
+            01) mois_fr="janvier" ;;
+            02) mois_fr="février" ;;
+            03) mois_fr="mars" ;;
+            04) mois_fr="avril" ;;
+            05) mois_fr="mai" ;;
+            06) mois_fr="juin" ;;
+            07) mois_fr="juillet" ;;
+            08) mois_fr="août" ;;
+            09) mois_fr="septembre" ;;
+            10) mois_fr="octobre" ;;
+            11) mois_fr="novembre" ;;
+            12) mois_fr="décembre" ;;
+            *) mois_fr="${mois_num}" ;;
+          esac
+          mois_label="${mois_fr} ${annee}"
+
+          if [ "${MODE_IN}" = "test" ]; then
+            echo "mode=test" >> "$GITHUB_OUTPUT"
+            echo "to=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
+            echo "bcc=" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Test live] ${CLIENT_DOMAIN} - workflow maintenance mensuelle" >> "$GITHUB_OUTPUT"
+            echo ">> Mode test live, courriel envoyé seulement à ${PS_ADMIN_EMAIL}."
+          else
+            echo "mode=prod" >> "$GITHUB_OUTPUT"
+            echo "to=${CLIENT_EMAIL}" >> "$GITHUB_OUTPUT"
+            echo "bcc=${PS_ADMIN_EMAIL}" >> "$GITHUB_OUTPUT"
+            echo "subject=[Patoine Studio - Maintenance] ${CLIENT_DOMAIN} - vérification mensuelle du formulaire (${mois_label})" >> "$GITHUB_OUTPUT"
+            echo ">> Mode prod, courriel envoyé à ${CLIENT_EMAIL} avec bcc ${PS_ADMIN_EMAIL}."
+          fi
+
+      - name: Tester l'envoi de courriel via API Resend
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_TO: ${{ steps.mode.outputs.to }}
+          MAIL_BCC: ${{ steps.mode.outputs.bcc }}
+          MAIL_SUBJECT: ${{ steps.mode.outputs.subject }}
+          MAIL_MODE: ${{ steps.mode.outputs.mode }}
+          PS_FROM: ${{ inputs.ps_from }}
+          CLIENT_LABEL: ${{ inputs.client_label }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RESEND_API_KEY:-}" ]; then
+            echo "Erreur fatale, le secret RESEND_API_KEY est absent du repo client."
+            exit 1
+          fi
+
+          # Corps HTML adapté selon le mode.
+          if [ "${MAIL_MODE}" = "test" ]; then
+            html="<p>Test live du workflow <code>maintenance-mensuelle.yml</code> du repo <code>${REPO_NAME}</code>.</p><p>Si ce courriel arrive bien dans la boîte hub Patoine Studio, la chaîne API Resend depuis GitHub Actions est validée. On pourra rebasculer le destinataire vers le client avant que le cron prenne le relais le premier lundi du prochain mois.</p><p>Émis automatiquement par GitHub Actions, pas d'action requise.</p>"
+          else
+            html="<p>Bonjour mon pote,</p><p>Ceci est le test mensuel automatique du formulaire de contact de ton site ${CLIENT_LABEL}. Si tu reçois ce courriel, la chaîne d'envoi fonctionne correctement et tes leads aboutissent bien dans ta boîte.</p><p>Aucune action requise de ta part. Si tu veux quoi que ce soit ajusté, tu m'écris.</p><p>Charles, Patoine Studio</p>"
+          fi
+
+          # Construction du payload via jq pour éviter les soucis d'escape avec
+          # les caractères spéciaux dans le sujet ou le HTML.
+          payload=$(jq -n \
+            --arg from "${PS_FROM}" \
+            --arg to "${MAIL_TO}" \
+            --arg subject "${MAIL_SUBJECT}" \
+            --arg html "${html}" \
+            '{from: $from, to: [$to], subject: $subject, html: $html}')
+
+          if [ -n "${MAIL_BCC}" ]; then
+            payload=$(echo "$payload" | jq --arg bcc "${MAIL_BCC}" '. + {bcc: [$bcc]}')
+          fi
+
+          echo "Payload Resend prêt, envoi en cours..."
+
+          http_status=$(curl -s -o resend-response.json -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "${payload}")
+
+          echo "HTTP status Resend : ${http_status}"
+          echo "Corps de la réponse :"
+          cat resend-response.json
+          echo
+
+          if [ "${http_status}" -lt 200 ] || [ "${http_status}" -ge 300 ]; then
+            echo "Erreur d'envoi Resend, on échoue le workflow."
+            exit 1
+          fi
+
+          message_id=$(jq -r '.id // empty' resend-response.json)
+          if [ -z "${message_id}" ]; then
+            echo "Réponse Resend OK mais id manquant, à investiguer."
+          else
+            echo "Courriel envoyé avec succès, id Resend : ${message_id}"
+          fi
+
+      - name: Snapshot PageSpeed Insights (mobile et desktop)
+        env:
+          PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
+          SITE_URL: ${{ inputs.site_url }}
+        run: |
+          set -euo pipefail
+          mois=$(date -u +%Y-%m)
+          mkdir -p .maintenance/perf
+
+          # L'API PageSpeed Insights tolère un quota anonyme limité, partagé
+          # entre tous les utilisateurs anonymes d'une même IP. Les runners
+          # GitHub Actions partagent des IPs avec des milliers d'autres
+          # workflows, donc le rate-limit anonyme (HTTP 429) tombe vite.
+          # Si un secret PAGESPEED_API_KEY est configuré, on l'utilise pour
+          # bénéficier du quota authentifié (25k req/jour par projet GCP).
+          # Fallback gracieux à l'API anonyme sinon, avec retry + backoff.
+          if [ -n "${PAGESPEED_API_KEY:-}" ]; then
+            echo "Clé PageSpeed Insights présente, on utilise le quota authentifié."
+            key_param="&key=${PAGESPEED_API_KEY}"
+          else
+            echo "Pas de clé PageSpeed configurée, fallback API anonyme (rate-limit possible)."
+            key_param=""
+          fi
+
+          first=true
+
+          for strategy in mobile desktop; do
+            out=".maintenance/perf/${mois}-${strategy}.json"
+
+            if [ "${first}" = "false" ]; then
+              echo "Pause de 5 s entre les deux stratégies..."
+              sleep 5
+            fi
+            first=false
+
+            url="https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${SITE_URL}&strategy=${strategy}&category=performance${key_param}"
+
+            # Retry avec backoff exponentiel : 3 tentatives, pauses 10 s puis 20 s.
+            attempts=3
+            for attempt in $(seq 1 ${attempts}); do
+              echo "PageSpeed ${strategy} (tentative ${attempt}/${attempts}) -> ${out}"
+              http_status=$(curl -sS -o "${out}" -w "%{http_code}" "${url}" || echo "000")
+              if [ "${http_status}" -ge 200 ] && [ "${http_status}" -lt 300 ]; then
+                echo "  HTTP ${http_status}, réponse reçue."
+                break
+              fi
+              echo "  HTTP ${http_status}, échec de la tentative ${attempt}."
+              if [ "${attempt}" -lt "${attempts}" ]; then
+                pause=$((10 * attempt))
+                echo "  Pause de ${pause} s avant le prochain essai..."
+                sleep ${pause}
+              else
+                echo "  Toutes les tentatives ont échoué pour ${strategy}."
+                echo "  Dernière réponse :"
+                cat "${out}" || true
+                exit 1
+              fi
+            done
+
+            if ! jq -e '.lighthouseResult.categories.performance.score' "${out}" > /dev/null; then
+              echo "Snapshot ${strategy} invalide (pas de score performance)."
+              cat "${out}"
+              exit 1
+            fi
+
+            score=$(jq '.lighthouseResult.categories.performance.score' "${out}")
+            echo "  Score performance ${strategy} : ${score}"
+          done
+
+      - name: Commit du snapshot perf
+        run: |
+          set -euo pipefail
+          git config user.name "Maintenance bot Patoine Studio"
+          git config user.email "maintenance@patoinestudio.ca"
+          git add .maintenance/
+
+          if git diff --cached --quiet; then
+            echo "Aucun changement à commiter, snapshot identique au précédent."
+            exit 0
+          fi
+
+          mois=$(date -u +%Y-%m)
+          git commit -m "chore(maintenance): snapshot perf ${mois}"
+          git push origin HEAD:${{ github.ref_name }}
+          echo "Snapshot commité et poussé sur ${{ github.ref_name }}."
+
+      - name: Récapitulatif du cycle
+        if: always()
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+        run: |
+          set -euo pipefail
+          mois=$(date -u +%Y-%m)
+          {
+            echo "### Cycle maintenance ${mois}"
+            echo ""
+            echo "- Client : ${{ inputs.client_label }} (${{ inputs.client_domain }})"
+            echo "- Mode : ${{ steps.mode.outputs.mode }}"
+            echo "- Destinataire : ${{ steps.mode.outputs.to }}"
+            echo "- Bcc : ${{ steps.mode.outputs.bcc }}"
+            echo "- Site : ${SITE_URL}"
+            echo ""
+            if [ -d .maintenance/perf ]; then
+              echo "Snapshots PageSpeed du mois :"
+              for f in .maintenance/perf/${mois}-*; do
+                if [ -f "$f" ]; then
+                  echo "- \`${f}\`"
+                fi
+              done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
