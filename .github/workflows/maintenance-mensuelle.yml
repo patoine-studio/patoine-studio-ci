@@ -507,18 +507,41 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "verdict_court=${verdict_court}" >> "$GITHUB_OUTPUT"
 
-      - name: Vérifier les liens brisés (Lychee, CLI direct)
+      - name: Vérifier les liens brisés (Lychee, CLI direct, multi-pages + sitemap)
         id: lychee_run
         continue-on-error: true
         env:
           SITE_URL: ${{ inputs.site_url }}
+          PAGES_TO_TEST: ${{ inputs.pages_to_test }}
         run: |
           set +e
           curl -sSL https://github.com/lycheeverse/lychee/releases/latest/download/lychee-x86_64-unknown-linux-gnu.tar.gz \
             | tar xz lychee
           chmod +x lychee
+
+          # Construire la liste des URLs à scanner : chaque page de pages_to_test + le sitemap.xml.
+          # Lychee fait l'union et dédoublonne. Si sitemap absent (404), Lychee la signale
+          # mais continue avec les autres URLs (option C, hybride).
+          site_url_clean="${SITE_URL%/}"
+          urls=()
+          while IFS= read -r page; do
+            [ -z "${page}" ] && continue
+            if [ "${page}" = "/" ]; then
+              urls+=("${site_url_clean}/")
+            else
+              urls+=("${site_url_clean}${page}")
+            fi
+          done < <(echo "${PAGES_TO_TEST}" | jq -r '.[]')
+
+          # Ajout du sitemap.xml comme source supplémentaire d'URLs.
+          # Lychee détecte le format sitemap, extrait les URLs et les visite chacune.
+          urls+=("${site_url_clean}/sitemap.xml")
+
+          echo "Lychee va scanner les URLs suivantes :"
+          printf '  %s\n' "${urls[@]}"
+
           ./lychee --no-progress --max-concurrency 4 --timeout 20 --max-redirects 3 \
-            --format json --output lychee-report.json "${SITE_URL}"
+            --format json --output lychee-report.json "${urls[@]}"
           status=$?
           echo "Lychee exit code: ${status}"
           if [ -f lychee-report.json ]; then
