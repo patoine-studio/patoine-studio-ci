@@ -291,7 +291,8 @@ jobs:
         id: lychee_run
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --no-progress --max-concurrency 4 --timeout 20 --max-redirects 3 --format json --output lychee-report.json ${{ inputs.site_url }}
+          args: --no-progress --max-concurrency 4 --timeout 20 --max-redirects 3 --format json ${{ inputs.site_url }}
+          output: lychee-report.json
           fail: false
         continue-on-error: true
 
