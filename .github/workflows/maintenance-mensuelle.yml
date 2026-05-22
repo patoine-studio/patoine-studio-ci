@@ -571,15 +571,25 @@ jobs:
           echo "total=${total}" >> "$GITHUB_OUTPUT"
           echo "broken_count=${errors}" >> "$GITHUB_OUTPUT"
 
-          # Phrase de statut compacte qui s'insère dans la puce Technique > Liens
+          # Phrase de statut compacte qui s'insère dans la puce Technique > Liens.
+          # Fix défensif 2026-05-22 soir : la structure du JSON Lychee a changé
+          # entre 0.23 et 0.24, .fail_map peut être null. On extrait la liste
+          # détaillée avec un fallback gracieux. Si l'extraction échoue, on
+          # garde juste le compteur de liens brisés sans la liste détaillée.
           if [ "${errors}" -gt 0 ]; then
             liens_items=$(jq -r '
-              .fail_map
+              ((.fail_map // .error_map // {}) // {})
               | to_entries
-              | map(.value[] | "<li><code>\(.url)</code> (\(.status.text // .status.code // "erreur"))</li>")
+              | map(.value[]? | "<li><code>\(.url // "?")</code> (\(.status.text // .status.code // "erreur"))</li>")
               | join("")
-            ' lychee-report.json)
-            liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés :<ul style='margin:6px 0 6px 0;padding-left:20px;'>${liens_items}</ul>Je les corrige dans le prochain cycle."
+            ' lychee-report.json 2>/dev/null || echo "")
+            if [ -n "${liens_items}" ]; then
+              liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés :<ul style='margin:6px 0 6px 0;padding-left:20px;'>${liens_items}</ul>Je les corrige dans le prochain cycle."
+            else
+              # Fallback si le format JSON n'expose pas la liste détaillée.
+              # À investiguer en session dédiée pour Lychee v0.24+.
+              liens_inline="Vérification automatique mensuelle. <strong>${errors} lien(s) brisé(s) détecté(s)</strong> sur les ${total} liens vérifiés. Je vais creuser le détail et les corriger dans le prochain cycle."
+            fi
           else
             liens_inline="Vérification automatique mensuelle. Aucun lien brisé détecté sur les ${total} liens vérifiés ce mois-ci. Utile parce que les liens vers tes réseaux sociaux ou des sites partenaires peuvent disparaître avec le temps."
           fi
