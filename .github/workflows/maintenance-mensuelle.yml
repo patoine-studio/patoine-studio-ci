@@ -50,12 +50,20 @@ on:
         required: false
         type: string
         default: "Maintenance Patoine Studio <maintenance@patoinestudio.ca>"
+      notion_conseils_database_id:
+        description: "Database ID de la BDD Notion Conseils maintenance mensuelle PS"
+        required: false
+        type: string
+        default: "a304778d7c664f20b546b88d31252d47"
     secrets:
       RESEND_API_KEY:
         description: "Clé Resend du domaine d'envoi PS"
         required: true
       PAGESPEED_API_KEY:
         description: "Clé Google Cloud avec API PageSpeed Insights activée"
+        required: false
+      NOTION_TOKEN:
+        description: "Token Internal Integration Notion pour lire le catalogue Conseils maintenance mensuelle PS"
         required: false
 
 jobs:
@@ -175,6 +183,8 @@ jobs:
           echo "mois_prev_fr=${mois_prev_fr}" >> "$GITHUB_OUTPUT"
           echo "mois_courant=${mois_courant}" >> "$GITHUB_OUTPUT"
           echo "mois_prev=${mois_prev}" >> "$GITHUB_OUTPUT"
+          mois_num_int=$((10#${mois_num}))
+          echo "mois_num_int=${mois_num_int}" >> "$GITHUB_OUTPUT"
 
       - name: Snapshot PageSpeed Insights (mobile et desktop)
         id: pagespeed
@@ -383,6 +393,62 @@ jobs:
           echo "low=${low}" >> "$GITHUB_OUTPUT"
           echo "total=${total}" >> "$GITHUB_OUTPUT"
 
+      - name: Récupérer le conseil du mois (Notion)
+        id: conseil
+        if: always()
+        continue-on-error: true
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ inputs.notion_conseils_database_id }}
+          MOIS_NUM: ${{ steps.mode.outputs.mois_num_int }}
+        run: |
+          set +e
+          if [ -z "${NOTION_TOKEN:-}" ]; then
+            echo "NOTION_TOKEN absent, fallback placeholder."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          response=$(curl -sS -X POST "https://api.notion.com/v1/databases/${NOTION_DATABASE_ID}/query" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -H "Notion-Version: 2022-06-28" \
+            -d "{\"filter\": {\"property\": \"Numéro\", \"number\": {\"equals\": ${MOIS_NUM}}}}")
+
+          if ! echo "${response}" | jq -e '.results[0]' > /dev/null 2>&1; then
+            echo "Réponse Notion invalide ou conseil manquant pour le mois ${MOIS_NUM}."
+            echo "${response}" | head -c 500
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hook=$(echo "${response}" | jq -r '.results[0].properties["Phrase d'"'"'accroche"].title[0].plain_text // empty')
+          texte=$(echo "${response}" | jq -r '.results[0].properties["Texte du conseil"].rich_text[0].plain_text // empty')
+          valeur=$(echo "${response}" | jq -r '.results[0].properties["Valeur Patoine Studio"].rich_text[0].plain_text // empty')
+          theme=$(echo "${response}" | jq -r '.results[0].properties["Thème"].select.name // empty')
+
+          if [ -z "${hook}" ] || [ -z "${texte}" ] || [ -z "${valeur}" ]; then
+            echo "Champs manquants dans le conseil Notion."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Conseil récupéré : ${theme}"
+
+          {
+            echo "available=true"
+            echo "theme=${theme}"
+            echo "hook<<HOOK_EOF"
+            echo "${hook}"
+            echo "HOOK_EOF"
+            echo "texte<<TEXTE_EOF"
+            echo "${texte}"
+            echo "TEXTE_EOF"
+            echo "valeur<<VALEUR_EOF"
+            echo "${valeur}"
+            echo "VALEUR_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Construire et envoyer le rapport client (Resend)
         id: resend
         env:
@@ -396,6 +462,10 @@ jobs:
           MOIS_LABEL: ${{ steps.mode.outputs.mois_label }}
           VITESSE_HTML: ${{ steps.delta.outputs.vitesse_html }}
           LIENS_INLINE: ${{ steps.liens.outputs.liens_inline }}
+          CONSEIL_AVAILABLE: ${{ steps.conseil.outputs.available }}
+          CONSEIL_HOOK: ${{ steps.conseil.outputs.hook }}
+          CONSEIL_TEXTE: ${{ steps.conseil.outputs.texte }}
+          CONSEIL_VALEUR: ${{ steps.conseil.outputs.valeur }}
         run: |
           set -euo pipefail
 
@@ -425,8 +495,17 @@ jobs:
 
           # Section Liens supprimée, intégrée dans Technique comme 3e puce
 
-          # Section 4, Conseil du mois (placeholder pour V1 sans Notion)
-          section_conseil="<h3 style='margin-top:24px;color:#1a1a1a;'>Conseil du mois</h3><p><em>(Catalogue de conseils en construction, première rotation activée au prochain cycle.)</em></p><p>Quand tu envoies des photos pour ton site, vise toujours du format WebP plutôt que JPEG ou PNG, ça réduit le poids de 30 % sans perte visible. <strong>Chez Patoine Studio, on convertit toutes les images au format optimal pour mobile par défaut.</strong></p>"
+          # Section 4, Conseil du mois (lu depuis la BDD Notion Conseils maintenance mensuelle PS)
+          if [ "${CONSEIL_AVAILABLE}" = "true" ]; then
+            section_conseil="<h3 style='margin-top:24px;color:#1a1a1a;'>Conseil du mois</h3>"
+            section_conseil="${section_conseil}<p style='font-weight:600;color:#1a1a1a;font-size:16px;'>${CONSEIL_HOOK}</p>"
+            section_conseil="${section_conseil}<p>${CONSEIL_TEXTE}</p>"
+            section_conseil="${section_conseil}<div style='margin-top:16px;padding:14px 16px;background:#f5f0e8;border-radius:6px;border-left:3px solid #1a1a1a;'>"
+            section_conseil="${section_conseil}<p style='margin:0;'><strong>La valeur Patoine Studio</strong> : ${CONSEIL_VALEUR}</p>"
+            section_conseil="${section_conseil}</div>"
+          else
+            section_conseil="<h3 style='margin-top:24px;color:#1a1a1a;'>Conseil du mois</h3><p><em>Le conseil du mois n'a pas pu être récupéré depuis le catalogue. Je regarde ça pour le prochain cycle.</em></p>"
+          fi
 
           # Pied
           if [ "${MAIL_MODE}" = "test" ]; then
