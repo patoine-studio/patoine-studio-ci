@@ -478,14 +478,6 @@ jobs:
 
                 {object: "block", type: "divider", divider: {}},
 
-                h2("🎓 Aide-mémoire des indicateurs"),
-                bullet("Score performance : note globale Lighthouse en pourcentage. ≥ 90 % excellent, 70 à 89 % solide, 50 à 69 % à surveiller, < 50 % à améliorer."),
-                bullet("LCP (Largest Contentful Paint) : temps avant que l\u2019élément le plus important de la page soit affiché. ≤ 2 500 ms excellent, 2 500 à 4 000 à surveiller, > 4 000 à améliorer."),
-                bullet("CLS (Cumulative Layout Shift) : décalages visuels imprévus pendant le chargement. 0 parfaitement stable, ≤ 0,1 excellent, 0,1 à 0,25 à surveiller, > 0,25 à améliorer."),
-                bullet("INP (Interaction to Next Paint) : réactivité du site mesurée auprès des vrais utilisateurs Chrome via le CrUX de Google. ≤ 200 ms excellent, 200 à 500 à surveiller, > 500 à améliorer. Peut être absente pour un site à faible trafic Chrome."),
-
-                {object: "block", type: "divider", divider: {}},
-
                 {
                   object: "block",
                   type: "paragraph",
